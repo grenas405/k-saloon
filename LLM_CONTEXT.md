@@ -1,3 +1,62 @@
+# K Saloon POS LLM Context
+
+This file combines `instructions.json`, `deno.json`, and `package.json` so an LLM coding agent can read the project contract and build configuration from one place. The fenced JSON sections are the source material.
+
+## Quick Orientation
+
+- Project: k-saloon-pos 0.4.0
+- Product: K Saloon POS
+- Description: K Saloon POS — local-first desktop app (Electron shell + Deno/Hono backend + Vite/React UI)
+- Spec: local-first-business-app 1.1.0
+- Audience: LLM coding agents (Codex, Claude, etc.)
+- Architecture: Local-first desktop app = Electron app shell + a Deno HTTP backend running as a localhost sidecar process + a single-file SQLite database. Fully offline; no cloud, no accounts.
+- Backend task target: deno compile --no-terminal --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend.exe --target x86_64-pc-windows-msvc backend/server.ts
+- Electron entry: dist-electron/main.js
+- Package type: module
+- Key dependencies: @types/react, @types/react-dom, @vitejs/plugin-react, autoprefixer, concurrently, electron, electron-builder, postcss, react, react-dom, tailwindcss, typescript, vite, wait-on
+
+## Must-Preserve Constraints
+
+- money-integer-cents: Store and compute all money as integer cents. Never use floats for currency.
+- server-side-totals: The backend recomputes subtotal/tax/total from line items and the stored tax rate on every create. Never trust totals sent by the client.
+- local-day-grouping: Store created_at as UTC ISO for display, but also store a separate sale_date = local YYYY-MM-DD and group/report by sale_date.
+- deno-compile-no-npm: The deno.json build:backend task MUST pass --no-npm and set "nodeModulesDir": "none".
+- windows-sidecar-no-console: The Windows backend exe MUST be compiled with deno compile --no-terminal, and Electron MUST spawn the packaged sidecar with windowsHide:true and stdio:'ignore' (dev may keep stdio:'inherit').
+- commonjs-preload: Compile electron/ (main + preload) as CommonJS, and write a dist-electron/package.json containing {"type":"commonjs"} during the build. The root package.json is "type":"module".
+- sqlite-backup-method: For backups, do NOT use 'VACUUM INTO' (unsupported by node:sqlite — attached-db limit is 0). Instead run PRAGMA wal_checkpoint(TRUNCATE) then copy the db file.
+- additive-migrations: Schema changes are additive and idempotent: CREATE TABLE IF NOT EXISTS, plus an addColumnIfMissing(table,col,type) helper that checks PRAGMA table_info before ALTER. Backfill new columns. Never drop/rewrite existing data on upgrade.
+- localhost-only: Bind the backend to 127.0.0.1 only. Pick a free ephemeral port at launch; the renderer learns it via a ?port= query param and/or the preload bridge.
+- secure-electron: contextIsolation: true, nodeIntegration: false. Expose only an explicit, minimal API via contextBridge (e.g., window.app = { backendBaseUrl, printDoc, savePdf }).
+- offline-charts: Render charts/sparklines as inline SVG. Do not add a charting dependency.
+- version-in-ui-and-changelog: Inject the package.json version at build time (Vite define __APP_VERSION__) and show it subtly in the header + a Settings 'About' line. Bump package.json version and add a CHANGES.md entry for every shippable change.
+- vite-relative-base: Set "base": "./" in vite.config.ts so the built index.html references ./assets/... (relative), not /assets/... (absolute).
+- embed-binary-assets: Any static asset the BACKEND serves (logo, images) must be embedded as a base64 data URI compiled into the exe — generate a TS module (e.g. backend/logo.ts via scripts/embed-logo.mjs) and import it. The RENDERER imports the same file as a normal Vite asset (import logoUrl from './assets/x.jpg').
+- print-color-fidelity: Receipts that use color (brand bars, logos) MUST set '-webkit-print-color-adjust: exact; print-color-adjust: exact;' and an '@page { size: 80mm auto; margin: 0 }'. Electron's webContents.print() has NO preview pane, so provide an in-app preview by rendering the receipt HTML in a sandboxed <iframe srcDoc=...> with Print / Save PDF buttons.
+- additive-settings-keys: A new settings key must be added in THREE places: (1) seed() defaults in db.ts, (2) the ALLOWED set in routes/settings.ts, and (3) a code-level fallback default where it is consumed (e.g. receipt.ts). Never assume the key exists.
+- node-sqlite-row-typing: node:sqlite .all()/.get() return Record<string, SQLOutputValue>. Cast typed rows through unknown first: 'stmt.all() as unknown as Row[]'. Coerce money columns with Number() at the boundary if doing arithmetic.
+
+## Deno Tasks
+
+- deno task dev: deno run --watch --allow-net --allow-read --allow-write --allow-env backend/server.ts
+- deno task start: deno run --allow-net --allow-read --allow-write --allow-env backend/server.ts
+- deno task test: deno test --allow-net --allow-read --allow-write --allow-env backend/
+- deno task build:backend: deno compile --no-terminal --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend.exe --target x86_64-pc-windows-msvc backend/server.ts
+- deno task build:backend:local: deno compile --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend backend/server.ts
+
+## NPM Scripts
+
+- npm run dev: concurrently -k -n vite,electron -c cyan,magenta "npm:dev:renderer" "npm:dev:electron"
+- npm run dev:renderer: vite
+- npm run dev:electron: tsc -p electron/tsconfig.json && node scripts/write-electron-cjs.mjs && wait-on tcp:5173 && electron .
+- npm run build:renderer: vite build
+- npm run build:electron: tsc -p electron/tsconfig.json && node scripts/write-electron-cjs.mjs
+- npm run build: npm run build:renderer && npm run build:electron
+- npm run dist: npm run build && electron-builder --win
+- npm run rebuild:backend: deno task build:backend
+
+## Full Source: instructions.json
+
+```json
 {
   "spec": "local-first-business-app",
   "specVersion": "1.1.0",
@@ -300,3 +359,101 @@
 
   "referenceImplementation": "Rivera Tire POS is the canonical example of the tire_shop domainPack. Jaretzy Hairsalon POS is a proven second instantiation (hair_salon domainPack) that contributed the later 'constraints' — vite-relative-base, embed-binary-assets, print-color-fidelity, additive-settings-keys, node-sqlite-row-typing — plus the brand-color tokens, embedded logo, branded receipt, and in-app receipt preview. Mirror this structure and conventions."
 }
+```
+
+## Full Source: deno.json
+
+```json
+{
+  "tasks": {
+    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env backend/server.ts",
+    "start": "deno run --allow-net --allow-read --allow-write --allow-env backend/server.ts",
+    "test": "deno test --allow-net --allow-read --allow-write --allow-env backend/",
+    "build:backend": "deno compile --no-terminal --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend.exe --target x86_64-pc-windows-msvc backend/server.ts",
+    "build:backend:local": "deno compile --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend backend/server.ts"
+  },
+  "nodeModulesDir": "none",
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "hono": "jsr:@hono/hono@^4.6.14"
+  },
+  "fmt": {
+    "include": ["backend/"]
+  },
+  "lint": {
+    "include": ["backend/"]
+  }
+}
+```
+
+## Full Source: package.json
+
+```json
+{
+  "name": "k-saloon-pos",
+  "version": "0.4.0",
+  "description": "K Saloon POS — local-first desktop app (Electron shell + Deno/Hono backend + Vite/React UI)",
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c cyan,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "tsc -p electron/tsconfig.json && node scripts/write-electron-cjs.mjs && wait-on tcp:5173 && electron .",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p electron/tsconfig.json && node scripts/write-electron-cjs.mjs",
+    "build": "npm run build:renderer && npm run build:electron",
+    "dist": "npm run build && electron-builder --win",
+    "rebuild:backend": "deno task build:backend"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "electron": "^41.7.1",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "com.ksaloon.pos",
+    "productName": "K Saloon POS",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "dist-renderer/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/k-saloon-backend.exe",
+        "to": "backend/k-saloon-backend.exe"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "K Saloon POS"
+    }
+  }
+}
+```
