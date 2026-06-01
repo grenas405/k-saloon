@@ -3,7 +3,7 @@
     "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env backend/server.ts",
     "start": "deno run --allow-net --allow-read --allow-write --allow-env backend/server.ts",
     "test": "deno test --allow-net --allow-read --allow-write --allow-env backend/",
-    "build:backend": "deno compile --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend.exe --target x86_64-pc-windows-msvc backend/server.ts",
+    "build:backend": "deno compile --no-terminal --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend.exe --target x86_64-pc-windows-msvc backend/server.ts",
     "build:backend:local": "deno compile --no-npm --allow-net --allow-read --allow-write --allow-env --output dist/k-saloon-backend backend/server.ts"
   },
   "nodeModulesDir": "none",

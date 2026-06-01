@@ -42,7 +42,8 @@ function spawnBackend(port: number): ChildProcess {
   console.log(`[backend] spawning ${bin}`);
   const child = spawn(bin, [], {
     env: { ...process.env, POS_PORT: String(port), POS_DB_PATH: dbPath },
-    stdio: "inherit",
+    stdio: app.isPackaged ? "ignore" : "inherit",
+    windowsHide: true,
   });
   child.on("error", (err) =>
     console.error(`[backend] failed to spawn (${bin}):`, err.message));
