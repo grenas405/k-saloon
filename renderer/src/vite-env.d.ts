@@ -10,6 +10,7 @@ interface AppBridge {
     suggestedName: string,
   ) => Promise<{ ok: boolean; canceled?: boolean; filePath?: string }>;
   getBackendBaseUrl: () => Promise<string>;
+  openPath: (path: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 interface Window {

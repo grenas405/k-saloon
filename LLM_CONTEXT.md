@@ -4,7 +4,7 @@ This file combines `instructions.json`, `deno.json`, and `package.json` so an LL
 
 ## Quick Orientation
 
-- Project: k-saloon-pos 0.4.0
+- Project: k-saloon-pos 0.5.0
 - Product: K Saloon POS
 - Description: K Saloon POS — local-first desktop app (Electron shell + Deno/Hono backend + Vite/React UI)
 - Spec: local-first-business-app 1.1.0
@@ -391,7 +391,7 @@ This file combines `instructions.json`, `deno.json`, and `package.json` so an LL
 ```json
 {
   "name": "k-saloon-pos",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "K Saloon POS — local-first desktop app (Electron shell + Deno/Hono backend + Vite/React UI)",
   "author": "",
   "license": "UNLICENSED",

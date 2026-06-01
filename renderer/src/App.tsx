@@ -3,14 +3,16 @@ import { api } from "./api";
 import type { Settings } from "./types";
 import { Register } from "./pages/Register";
 import { Dashboard } from "./pages/Dashboard";
+import { History } from "./pages/History";
 import { Catalog } from "./pages/Catalog";
 import { SettingsPage } from "./pages/Settings";
 
-type Tab = "register" | "dashboard" | "catalog" | "settings";
+type Tab = "register" | "dashboard" | "history" | "catalog" | "settings";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "register", label: "Register" },
   { id: "dashboard", label: "Dashboard" },
+  { id: "history", label: "History" },
   { id: "catalog", label: "Catalog" },
   { id: "settings", label: "Settings" },
 ];
@@ -59,6 +61,7 @@ export function App() {
       <main className="min-h-0 flex-1 overflow-hidden">
         {tab === "register" && <Register />}
         {tab === "dashboard" && <Dashboard />}
+        {tab === "history" && <History />}
         {tab === "catalog" && <Catalog />}
         {tab === "settings" && (
           <SettingsPage settings={settings} onSaved={loadSettings} />

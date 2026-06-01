@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld("app", {
   savePdf: (html: string, suggestedName: string) =>
     ipcRenderer.invoke("save-pdf", html, suggestedName),
   getBackendBaseUrl: () => ipcRenderer.invoke("backend-base-url"),
+  openPath: (path: string) => ipcRenderer.invoke("open-path", path),
 });

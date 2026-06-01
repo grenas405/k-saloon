@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Settings } from "../types";
+import type { BackupInfo, Settings } from "../types";
 
 export function SettingsPage(
   { settings, onSaved }: { settings: Settings; onSaved: () => void },
@@ -8,8 +8,18 @@ export function SettingsPage(
   const [form, setForm] = useState<Settings>(settings);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [backupInfo, setBackupInfo] = useState<BackupInfo | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState("");
 
   useEffect(() => setForm(settings), [settings]);
+  useEffect(() => {
+    loadBackups();
+  }, []);
+
+  function loadBackups() {
+    api.getBackups().then(setBackupInfo).catch(() => setBackupInfo(null));
+  }
 
   async function save() {
     setError("");
@@ -23,6 +33,31 @@ export function SettingsPage(
     } catch (e) {
       setError((e as Error).message);
     }
+  }
+
+  async function backupNow() {
+    setBackupBusy(true);
+    setBackupMessage("");
+    try {
+      const result = await api.createBackup();
+      setBackupInfo(result.info);
+      setBackupMessage(`Backup created: ${result.path}`);
+    } catch (e) {
+      setBackupMessage((e as Error).message);
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function openBackupFolder() {
+    const dir = backupInfo?.directory;
+    if (!dir) return;
+    if (!window.app?.openPath) {
+      setBackupMessage("Open folder is available in the desktop app.");
+      return;
+    }
+    const result = await window.app.openPath(dir);
+    if (!result.ok) setBackupMessage(result.error || "Could not open backup folder.");
   }
 
   return (
@@ -63,6 +98,67 @@ export function SettingsPage(
               Line breaks are preserved. The logo prints automatically at the top.
             </p>
           </Field>
+        </Card>
+
+        <Card title="Backups">
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">
+                {backupInfo?.directory || "Backup folder unavailable"}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Daily snapshots are created on startup. Manual backups create an additional timestamped copy.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={backupNow}
+                disabled={backupBusy}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"
+              >
+                {backupBusy ? "Backing Up..." : "Backup Now"}
+              </button>
+              <button
+                onClick={openBackupFolder}
+                disabled={!backupInfo?.directory}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-50"
+              >
+                Open Folder
+              </button>
+              <button
+                onClick={loadBackups}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700"
+              >
+                Refresh
+              </button>
+            </div>
+            {backupMessage && (
+              <p className="break-all text-xs font-semibold text-slate-500">
+                {backupMessage}
+              </p>
+            )}
+            <div className="rounded-xl border border-slate-100 bg-slate-50">
+              {(backupInfo?.backups.length ?? 0) === 0 && (
+                <p className="p-3 text-sm text-slate-400">No backups found yet.</p>
+              )}
+              {backupInfo?.backups.slice(0, 5).map((b) => (
+                <div
+                  key={b.path}
+                  className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 last:border-b-0"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-700">{b.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {new Date(b.modified_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-xs font-bold text-slate-400">
+                    {formatBytes(b.size_bytes)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </Card>
 
         <Card title="About">
@@ -112,4 +208,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </label>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }

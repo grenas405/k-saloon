@@ -7,6 +7,7 @@ import { Db } from "./db.ts";
 import { catalogRoutes } from "./routes/catalog.ts";
 import { transactionRoutes } from "./routes/transactions.ts";
 import { settingsRoutes } from "./routes/settings.ts";
+import { backupRoutes } from "./routes/backups.ts";
 
 export function createApp(db: Db): Hono {
   const app = new Hono();
@@ -16,6 +17,7 @@ export function createApp(db: Db): Hono {
   app.route("/", catalogRoutes(db));
   app.route("/", transactionRoutes(db));
   app.route("/", settingsRoutes(db));
+  app.route("/", backupRoutes(db));
 
   return app;
 }

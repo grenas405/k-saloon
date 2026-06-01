@@ -3,7 +3,7 @@
 // Picks a free 127.0.0.1 port, spawns the Deno backend sidecar (passing POS_PORT
 // and POS_DB_PATH), polls /health, then loads the UI. Exposes print / save-PDF
 // IPC and kills the sidecar on quit. (constraints: localhost-only, secure-electron)
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { writeFileSync } from "node:fs";
@@ -140,6 +140,12 @@ ipcMain.handle("save-pdf", async (_e, html: string, suggestedName: string) => {
 });
 
 ipcMain.handle("backend-base-url", () => `http://127.0.0.1:${backendPort}`);
+
+ipcMain.handle("open-path", async (_e, path: string) => {
+  if (!path) return { ok: false, error: "path required" };
+  const error = await shell.openPath(path);
+  return error ? { ok: false, error } : { ok: true };
+});
 
 // --- lifecycle ---------------------------------------------------------------
 

@@ -1,6 +1,8 @@
 // api.ts — fetch wrapper around the loopback backend + money helpers.
 import type {
+  BackupInfo,
   CatalogItem,
+  CloseoutReport,
   Dashboard,
   DayReport,
   Sale,
@@ -54,12 +56,29 @@ export const api = {
     payment_type: "cash" | "card";
     cash_tendered_cents?: number | null;
   }) => req<Sale>("/sales", { method: "POST", body: JSON.stringify(body) }),
+  getSale: (id: number) => req<Sale>(`/sales/${id}`),
+  voidSale: (id: number, reason: string) =>
+    req<Sale>(`/sales/${id}/void`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
   getDay: (date = "today") => req<DayReport>(`/sales?date=${date}`),
   getDashboard: (range: "today" | "7d" | "30d") =>
     req<Dashboard>(`/sales/dashboard?range=${range}`),
+  getCloseout: (date = "today") => req<CloseoutReport>(`/sales/closeout?date=${date}`),
+  closeoutUrl: (date: string) => `${BASE}/sales/closeout/print?date=${date}`,
+  exportUrl: (type: "sales" | "lines", from: string, to: string) =>
+    `${BASE}/sales/export?type=${type}&from=${from}&to=${to}`,
   receiptUrl: (id: number) => `${BASE}/sales/${id}/receipt`,
   getReceiptHtml: (id: number) =>
     fetch(`${BASE}/sales/${id}/receipt`).then((r) => r.text()),
+  getCloseoutHtml: (date: string) =>
+    fetch(`${BASE}/sales/closeout/print?date=${date}`).then((r) => r.text()),
+
+  getBackups: () => req<BackupInfo>("/backups"),
+  createBackup: () => req<{ ok: boolean; path: string; info: BackupInfo }>("/backups", {
+    method: "POST",
+  }),
 };
 
 // --- money helpers ----------------------------------------------------------

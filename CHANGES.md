@@ -2,6 +2,18 @@
 
 All notable changes to K Saloon POS are documented here.
 
+## [0.5.0] - 2026-06-01
+
+### Added
+- Sales History tab with dated ticket lookup, line-item inspection, receipt reprint, and CSV exports for sales and line items.
+- Void sale workflow that keeps the original ticket for audit while excluding voided sales from revenue, dashboard, closeout, and payment mix totals.
+- End-of-day closeout summary with paid ticket count, cash/card totals, tax, void totals, top items, and printable/PDF report preview.
+- Manual backup controls in Settings with backup folder visibility, Backup Now, recent snapshot list, and desktop folder opening.
+
+### Changed
+- Dashboard and daily totals now count only paid sales while History still displays voided tickets.
+- Receipts for voided sales now print with a visible VOID banner and reason.
+
 ## [0.4.0] - 2026-06-01
 
 ### Added

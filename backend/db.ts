@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -114,6 +115,13 @@ export function dateMinusDays(dateStr: string, n: number): string {
   return localDateString(dt);
 }
 
+function localTimestampForFile(d: Date = new Date()): string {
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${localDateString(d)}-${hh}${mm}${ss}`;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -146,9 +154,47 @@ export interface Sale {
   payment_type: PaymentType;
   cash_tendered_cents: number | null;
   change_cents: number | null;
+  status: "paid" | "void";
+  voided_at: string | null;
+  void_reason: string | null;
 }
 
 export type Range = "today" | "7d" | "30d";
+
+export interface SaleLine {
+  id: number;
+  name: string;
+  unit_price_cents: number;
+  qty: number;
+  line_total_cents: number;
+}
+
+export interface CloseoutReport {
+  date: string;
+  paid_count: number;
+  void_count: number;
+  item_count: number;
+  subtotal_cents: number;
+  tax_cents: number;
+  revenue_cents: number;
+  cash_cents: number;
+  card_cents: number;
+  void_total_cents: number;
+  avg_ticket_cents: number;
+  first_sale_at: string | null;
+  last_sale_at: string | null;
+  top_items: Array<{ name: string; qty: number; total_cents: number }>;
+}
+
+export interface BackupInfo {
+  directory: string | null;
+  backups: Array<{
+    name: string;
+    path: string;
+    size_bytes: number;
+    modified_at: string;
+  }>;
+}
 
 // ---------------------------------------------------------------------------
 // Database
@@ -210,6 +256,9 @@ export class Db {
     `);
     // Future-proofing: additive columns go through addColumnIfMissing so an old
     // installed DB upgrades in place without dropping live business data.
+    this.addColumnIfMissing("sales", "status", "TEXT NOT NULL DEFAULT 'paid'");
+    this.addColumnIfMissing("sales", "voided_at", "TEXT");
+    this.addColumnIfMissing("sales", "void_reason", "TEXT");
   }
 
   /** Idempotently add a column if PRAGMA table_info shows it missing. */
@@ -435,36 +484,45 @@ export class Db {
   }
 
   getSaleLines(saleId: number): Array<
-    {
-      id: number;
-      name: string;
-      unit_price_cents: number;
-      qty: number;
-      line_total_cents: number;
-    }
+    SaleLine
   > {
     return this.raw
       .prepare(
         "SELECT id, name, unit_price_cents, qty, line_total_cents FROM sale_line_items WHERE sale_id=? ORDER BY id",
       )
-      .all(saleId) as Array<
-        {
-          id: number;
-          name: string;
-          unit_price_cents: number;
-          qty: number;
-          line_total_cents: number;
-        }
-      >;
+      .all(saleId) as unknown as Array<SaleLine>;
   }
 
-  /** Sales for one local day plus cash/card split. */
+  getSaleWithLines(id: number): (Sale & { lines: SaleLine[] }) | undefined {
+    const sale = this.getSale(id);
+    if (!sale) return undefined;
+    return { ...sale, lines: this.getSaleLines(id) };
+  }
+
+  voidSale(id: number, reason: string): Sale | undefined {
+    const sale = this.getSale(id);
+    if (!sale) return undefined;
+    if (sale.status === "void") return sale;
+    this.raw
+      .prepare(
+        `UPDATE sales
+         SET status='void', voided_at=?, void_reason=?
+         WHERE id=?`,
+      )
+      .run(new Date().toISOString(), reason.trim() || "No reason provided", id);
+    return this.getSale(id);
+  }
+
+  /** Sales for one local day. Totals/counts exclude voided sales; the sales
+   *  array retains voided records so history remains auditable. */
   listSalesForDay(day: string): {
     sales: Array<Sale & { item_count: number }>;
     cash_total_cents: number;
     card_total_cents: number;
     total_cents: number;
     count: number;
+    void_count: number;
+    void_total_cents: number;
   } {
     const sales = this.raw
       .prepare(
@@ -477,8 +535,14 @@ export class Db {
       )
       .all(day) as unknown as Array<Sale & { item_count: number }>;
 
-    let cash = 0, card = 0;
+    let cash = 0, card = 0, count = 0, voidCount = 0, voidTotal = 0;
     for (const s of sales) {
+      if (s.status === "void") {
+        voidCount += 1;
+        voidTotal += s.total_cents;
+        continue;
+      }
+      count += 1;
       if (s.payment_type === "cash") cash += s.total_cents;
       else card += s.total_cents;
     }
@@ -487,7 +551,9 @@ export class Db {
       cash_total_cents: cash,
       card_total_cents: card,
       total_cents: cash + card,
-      count: sales.length,
+      count,
+      void_count: voidCount,
+      void_total_cents: voidTotal,
     };
   }
 
@@ -502,14 +568,14 @@ export class Db {
     const agg = this.raw
       .prepare(
         `SELECT COALESCE(SUM(total_cents),0) AS revenue, COUNT(*) AS cnt
-         FROM sales WHERE sale_date >= ? AND sale_date <= ?`,
+         FROM sales WHERE sale_date >= ? AND sale_date <= ? AND status='paid'`,
       )
       .get(start, end) as { revenue: number; cnt: number };
     const items = this.raw
       .prepare(
         `SELECT COALESCE(SUM(li.qty),0) AS items
          FROM sale_line_items li JOIN sales s ON s.id = li.sale_id
-         WHERE s.sale_date >= ? AND s.sale_date <= ?`,
+         WHERE s.sale_date >= ? AND s.sale_date <= ? AND s.status='paid'`,
       )
       .get(start, end) as { items: number };
     const count = agg.cnt;
@@ -537,7 +603,7 @@ export class Db {
     const rows = this.raw
       .prepare(
         `SELECT sale_date, SUM(total_cents) AS revenue
-         FROM sales WHERE sale_date >= ? AND sale_date <= ?
+         FROM sales WHERE sale_date >= ? AND sale_date <= ? AND status='paid'
          GROUP BY sale_date`,
       )
       .all(seriesStart, today) as Array<{ sale_date: string; revenue: number }>;
@@ -552,7 +618,7 @@ export class Db {
     const mixRows = this.raw
       .prepare(
         `SELECT payment_type, COALESCE(SUM(total_cents),0) AS amount
-         FROM sales WHERE sale_date >= ? AND sale_date <= ?
+         FROM sales WHERE sale_date >= ? AND sale_date <= ? AND status='paid'
          GROUP BY payment_type`,
       )
       .all(start, today) as Array<
@@ -569,6 +635,7 @@ export class Db {
         `SELECT s.id, s.created_at, s.total_cents, s.payment_type,
                 COALESCE(SUM(li.qty),0) AS item_count
          FROM sales s LEFT JOIN sale_line_items li ON li.sale_id = s.id
+         WHERE s.status='paid'
          GROUP BY s.id ORDER BY s.created_at DESC LIMIT 10`,
       )
       .all() as Array<
@@ -591,6 +658,138 @@ export class Db {
     };
   }
 
+  closeout(day: string): CloseoutReport {
+    const paid = this.raw
+      .prepare(
+        `SELECT COALESCE(SUM(subtotal_cents),0) AS subtotal,
+                COALESCE(SUM(tax_cents),0) AS tax,
+                COALESCE(SUM(total_cents),0) AS revenue,
+                COUNT(*) AS count,
+                MIN(created_at) AS first_sale_at,
+                MAX(created_at) AS last_sale_at
+         FROM sales WHERE sale_date=? AND status='paid'`,
+      )
+      .get(day) as {
+        subtotal: number;
+        tax: number;
+        revenue: number;
+        count: number;
+        first_sale_at: string | null;
+        last_sale_at: string | null;
+      };
+    const items = this.raw
+      .prepare(
+        `SELECT COALESCE(SUM(li.qty),0) AS item_count
+         FROM sale_line_items li JOIN sales s ON s.id = li.sale_id
+         WHERE s.sale_date=? AND s.status='paid'`,
+      )
+      .get(day) as { item_count: number };
+    const mixRows = this.raw
+      .prepare(
+        `SELECT payment_type, COALESCE(SUM(total_cents),0) AS amount
+         FROM sales WHERE sale_date=? AND status='paid'
+         GROUP BY payment_type`,
+      )
+      .all(day) as unknown as Array<
+        { payment_type: PaymentType; amount: number }
+      >;
+    let cash = 0, card = 0;
+    for (const m of mixRows) {
+      if (m.payment_type === "cash") cash = m.amount;
+      else if (m.payment_type === "card") card = m.amount;
+    }
+    const voids = this.raw
+      .prepare(
+        `SELECT COUNT(*) AS count, COALESCE(SUM(total_cents),0) AS total
+         FROM sales WHERE sale_date=? AND status='void'`,
+      )
+      .get(day) as { count: number; total: number };
+    const top_items = this.raw
+      .prepare(
+        `SELECT li.name, COALESCE(SUM(li.qty),0) AS qty,
+                COALESCE(SUM(li.line_total_cents),0) AS total_cents
+         FROM sale_line_items li JOIN sales s ON s.id = li.sale_id
+         WHERE s.sale_date=? AND s.status='paid'
+         GROUP BY li.name
+         ORDER BY qty DESC, total_cents DESC, li.name ASC
+         LIMIT 10`,
+      )
+      .all(day) as unknown as Array<
+        { name: string; qty: number; total_cents: number }
+      >;
+
+    return {
+      date: day,
+      paid_count: paid.count,
+      void_count: voids.count,
+      item_count: items.item_count,
+      subtotal_cents: paid.subtotal,
+      tax_cents: paid.tax,
+      revenue_cents: paid.revenue,
+      cash_cents: cash,
+      card_cents: card,
+      void_total_cents: voids.total,
+      avg_ticket_cents: paid.count > 0
+        ? Math.round(paid.revenue / paid.count)
+        : 0,
+      first_sale_at: paid.first_sale_at,
+      last_sale_at: paid.last_sale_at,
+      top_items,
+    };
+  }
+
+  exportSales(from: string, to: string): Array<
+    Sale & { item_count: number }
+  > {
+    return this.raw
+      .prepare(
+        `SELECT s.*, COALESCE(SUM(li.qty),0) AS item_count
+         FROM sales s LEFT JOIN sale_line_items li ON li.sale_id = s.id
+         WHERE s.sale_date >= ? AND s.sale_date <= ?
+         GROUP BY s.id
+         ORDER BY s.sale_date ASC, s.created_at ASC`,
+      )
+      .all(from, to) as unknown as Array<Sale & { item_count: number }>;
+  }
+
+  exportSaleLines(from: string, to: string): Array<
+    {
+      sale_id: number;
+      sale_date: string;
+      created_at: string;
+      sale_status: "paid" | "void";
+      payment_type: PaymentType;
+      item_name: string;
+      unit_price_cents: number;
+      qty: number;
+      line_total_cents: number;
+    }
+  > {
+    return this.raw
+      .prepare(
+        `SELECT s.id AS sale_id, s.sale_date, s.created_at,
+                s.status AS sale_status, s.payment_type,
+                li.name AS item_name, li.unit_price_cents, li.qty,
+                li.line_total_cents
+         FROM sale_line_items li JOIN sales s ON s.id = li.sale_id
+         WHERE s.sale_date >= ? AND s.sale_date <= ?
+         ORDER BY s.sale_date ASC, s.created_at ASC, li.id ASC`,
+      )
+      .all(from, to) as unknown as Array<
+        {
+          sale_id: number;
+          sale_date: string;
+          created_at: string;
+          sale_status: "paid" | "void";
+          payment_type: PaymentType;
+          item_name: string;
+          unit_price_cents: number;
+          qty: number;
+          line_total_cents: number;
+        }
+      >;
+  }
+
   // --- backups ---------------------------------------------------------------
 
   /** Consistent daily snapshot via checkpoint+copy (node:sqlite has no
@@ -598,13 +797,12 @@ export class Db {
   backupDaily(retain = 14): string | null {
     if (this.path === ":memory:") return null;
     try {
-      const dir = join(dirname(this.path), "backups");
-      mkdirSync(dir, { recursive: true });
+      const dir = this.backupDirectory();
+      if (!dir) return null;
       const dest = join(dir, `${BACKUP_PREFIX}-${localDateString()}.db`);
       if (existsSync(dest)) return dest; // already snapshotted today
 
-      this.raw.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      copyFileSync(this.path, dest);
+      this.writeBackup(dest);
 
       // Prune: keep newest `retain` snapshots.
       const snaps = readdirSync(dir)
@@ -619,6 +817,52 @@ export class Db {
     } catch {
       return null; // never block startup on backup failure
     }
+  }
+
+  backupNow(): string | null {
+    if (this.path === ":memory:") return null;
+    try {
+      const dir = this.backupDirectory();
+      if (!dir) return null;
+      const dest = join(
+        dir,
+        `${BACKUP_PREFIX}-manual-${localTimestampForFile()}.db`,
+      );
+      this.writeBackup(dest);
+      return dest;
+    } catch {
+      return null;
+    }
+  }
+
+  backupInfo(): BackupInfo {
+    const dir = this.backupDirectory();
+    if (!dir || !existsSync(dir)) return { directory: dir, backups: [] };
+    const backups = readdirSync(dir)
+      .filter((f) => f.startsWith(`${BACKUP_PREFIX}-`) && f.endsWith(".db"))
+      .map((name) => {
+        const path = join(dir, name);
+        const stat = statSync(path);
+        return {
+          name,
+          path,
+          size_bytes: stat.size,
+          modified_at: stat.mtime.toISOString(),
+        };
+      })
+      .sort((a, b) => b.name.localeCompare(a.name));
+    return { directory: dir, backups };
+  }
+
+  backupDirectory(): string | null {
+    if (this.path === ":memory:") return null;
+    return join(dirname(this.path), "backups");
+  }
+
+  private writeBackup(dest: string): void {
+    mkdirSync(dirname(dest), { recursive: true });
+    this.raw.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    copyFileSync(this.path, dest);
   }
 
   close(): void {

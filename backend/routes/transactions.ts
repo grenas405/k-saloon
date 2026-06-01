@@ -2,7 +2,36 @@
 import { Hono } from "hono";
 import type { Db, LineInput, PaymentType, Range } from "../db.ts";
 import { localDateString } from "../db.ts";
-import { renderReceipt } from "../receipt.ts";
+import { renderCloseout, renderReceipt } from "../receipt.ts";
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dayParam(value: string | undefined | null): string {
+  if (!value || value === "today") return localDateString();
+  return DATE_RE.test(value) ? value : localDateString();
+}
+
+function csvCell(value: unknown): string {
+  const s = value == null ? "" : String(value);
+  return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+}
+
+function csv(headers: string[], rows: unknown[][]): string {
+  return [
+    headers.map(csvCell).join(","),
+    ...rows.map((r) => r.map(csvCell).join(",")),
+  ].join("\n") + "\n";
+}
+
+function csvResponse(body: string, filename: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${filename}"`,
+    },
+  });
+}
 
 export function transactionRoutes(db: Db): Hono {
   const app = new Hono();
@@ -37,10 +66,7 @@ export function transactionRoutes(db: Db): Hono {
   });
 
   app.get("/sales", (c) => {
-    const dateParam = c.req.query("date");
-    const day = !dateParam || dateParam === "today"
-      ? localDateString()
-      : dateParam;
+    const day = dayParam(c.req.query("date"));
     return c.json(db.listSalesForDay(day));
   });
 
@@ -48,6 +74,102 @@ export function transactionRoutes(db: Db): Hono {
     const r = c.req.query("range");
     const range: Range = r === "7d" || r === "30d" ? r : "today";
     return c.json(db.dashboard(range));
+  });
+
+  app.get("/sales/closeout", (c) => {
+    const day = dayParam(c.req.query("date"));
+    return c.json(db.closeout(day));
+  });
+
+  app.get("/sales/closeout/print", (c) => {
+    const day = dayParam(c.req.query("date"));
+    return c.html(renderCloseout(db, day));
+  });
+
+  app.get("/sales/export", (c) => {
+    const from = dayParam(c.req.query("from"));
+    const to = dayParam(c.req.query("to") ?? c.req.query("from"));
+    const type = c.req.query("type") === "lines" ? "lines" : "sales";
+
+    if (type === "lines") {
+      const rows = db.exportSaleLines(from, to);
+      const body = csv(
+        [
+          "sale_id",
+          "sale_date",
+          "created_at",
+          "sale_status",
+          "payment_type",
+          "item_name",
+          "unit_price_cents",
+          "qty",
+          "line_total_cents",
+        ],
+        rows.map((r) => [
+          r.sale_id,
+          r.sale_date,
+          r.created_at,
+          r.sale_status,
+          r.payment_type,
+          r.item_name,
+          r.unit_price_cents,
+          r.qty,
+          r.line_total_cents,
+        ]),
+      );
+      return csvResponse(body, `k-saloon-line-items-${from}-to-${to}.csv`);
+    }
+
+    const rows = db.exportSales(from, to);
+    const body = csv(
+      [
+        "id",
+        "sale_date",
+        "created_at",
+        "status",
+        "payment_type",
+        "item_count",
+        "subtotal_cents",
+        "tax_cents",
+        "total_cents",
+        "cash_tendered_cents",
+        "change_cents",
+        "voided_at",
+        "void_reason",
+      ],
+      rows.map((r) => [
+        r.id,
+        r.sale_date,
+        r.created_at,
+        r.status,
+        r.payment_type,
+        r.item_count,
+        r.subtotal_cents,
+        r.tax_cents,
+        r.total_cents,
+        r.cash_tendered_cents,
+        r.change_cents,
+        r.voided_at,
+        r.void_reason,
+      ]),
+    );
+    return csvResponse(body, `k-saloon-sales-${from}-to-${to}.csv`);
+  });
+
+  app.get("/sales/:id", (c) => {
+    const id = Number(c.req.param("id"));
+    const sale = db.getSaleWithLines(id);
+    if (!sale) return c.json({ error: "not found" }, 404);
+    return c.json(sale);
+  });
+
+  app.post("/sales/:id/void", async (c) => {
+    const id = Number(c.req.param("id"));
+    const b = await c.req.json().catch(() => ({}));
+    const reason = String(b.reason ?? "").trim();
+    const sale = db.voidSale(id, reason);
+    if (!sale) return c.json({ error: "not found" }, 404);
+    return c.json({ ...sale, lines: db.getSaleLines(id) });
   });
 
   app.get("/sales/:id/receipt", (c) => {

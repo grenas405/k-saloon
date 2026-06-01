@@ -44,6 +44,7 @@ Deno.test("createSale: server recomputes totals; ignores nothing from client", (
   assertEquals(sale.total_cents, 435);
   assertEquals(sale.change_cents, null);
   assertEquals(sale.cash_tendered_cents, null);
+  assertEquals(sale.status, "paid");
   db.close();
 });
 
@@ -133,6 +134,46 @@ Deno.test("sale_date set to local day; listSalesForDay returns it", () => {
   assertEquals(day.sales[0].sale_date, today);
   // A different day has nothing.
   assertEquals(db.listSalesForDay(dateMinusDays(today, 5)).count, 0);
+  db.close();
+});
+
+Deno.test("voidSale: keeps audit history but removes sale from reporting totals", () => {
+  const db = freshDb();
+  const voided = db.createSale({
+    items: [{ name: "Domestic Beer", unit_price_cents: 400, qty: 1 }],
+    payment_type: "cash",
+    cash_tendered_cents: 500,
+  });
+  const paid = db.createSale({
+    items: [{ name: "Import Beer", unit_price_cents: 500, qty: 2 }],
+    payment_type: "card",
+  });
+
+  const updated = db.voidSale(voided.id, "Wrong ticket");
+  assertEquals(updated?.status, "void");
+  assertEquals(updated?.void_reason, "Wrong ticket");
+
+  const day = db.listSalesForDay(localDateString());
+  assertEquals(day.sales.length, 2);
+  assertEquals(day.count, 1);
+  assertEquals(day.void_count, 1);
+  assertEquals(day.total_cents, paid.total_cents);
+  assertEquals(day.void_total_cents, voided.total_cents);
+
+  const dash = db.dashboard("today");
+  assertEquals(dash.current.count, 1);
+  assertEquals(dash.current.revenue_cents, paid.total_cents);
+
+  const closeout = db.closeout(localDateString());
+  assertEquals(closeout.paid_count, 1);
+  assertEquals(closeout.void_count, 1);
+  assertEquals(closeout.revenue_cents, paid.total_cents);
+  assertEquals(closeout.cash_cents, 0);
+  assertEquals(closeout.card_cents, paid.total_cents);
+
+  const html = renderReceipt(db, updated!);
+  assert(html.includes("VOID"));
+  assert(html.includes("Wrong ticket"));
   db.close();
 });
 
@@ -290,10 +331,85 @@ Deno.test("HTTP: /health, POST /sales, GET /sales, GET /sales/dashboard", async 
   );
   assertEquals(dash.series.length, 7);
 
+  const detail = await app.request(`/sales/${sale.id}`);
+  assertEquals(detail.status, 200);
+  assertEquals((await detail.json()).lines.length, 1);
+
+  const closeout = await app.request("/sales/closeout?date=today");
+  assertEquals(closeout.status, 200);
+  assertEquals((await closeout.json()).paid_count, 1);
+
+  const closeoutPrint = await app.request("/sales/closeout/print?date=today");
+  assertEquals(closeoutPrint.status, 200);
+  assert((await closeoutPrint.text()).includes("Closeout"));
+
+  const exportSales = await app.request(
+    "/sales/export?type=sales&from=today&to=today",
+  );
+  assertEquals(exportSales.status, 200);
+  assert((await exportSales.text()).includes("void_reason"));
+
+  const exportLines = await app.request(
+    "/sales/export?type=lines&from=today&to=today",
+  );
+  assertEquals(exportLines.status, 200);
+  assert((await exportLines.text()).includes("Domestic Beer"));
+
   const receipt = await app.request(`/sales/${sale.id}/receipt`);
   assertEquals(receipt.status, 200);
   assert((await receipt.text()).includes("TOTAL"));
   db.close();
+});
+
+Deno.test("HTTP: void sale updates status and excludes it from closeout", async () => {
+  const db = freshDb();
+  const app = createApp(db);
+
+  const sale = await (await app.request("/sales", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      items: [{ name: "Domestic Beer", unit_price_cents: 400, qty: 1 }],
+      payment_type: "card",
+    }),
+  })).json();
+
+  const voided = await app.request(`/sales/${sale.id}/void`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reason: "Mistake" }),
+  });
+  assertEquals(voided.status, 200);
+  const body = await voided.json();
+  assertEquals(body.status, "void");
+  assertEquals(body.void_reason, "Mistake");
+
+  const closeout = await (await app.request("/sales/closeout?date=today"))
+    .json();
+  assertEquals(closeout.paid_count, 0);
+  assertEquals(closeout.void_count, 1);
+  assertEquals(closeout.revenue_cents, 0);
+  db.close();
+});
+
+Deno.test("HTTP: backups can be listed and created for file DBs", async () => {
+  const dir = await Deno.makeTempDir();
+  const db = new Db(`${dir}/pos.db`);
+  const app = createApp(db);
+
+  const created = await app.request("/backups", { method: "POST" });
+  assertEquals(created.status, 201);
+  const body = await created.json();
+  assertExists(body.path);
+  assert(await fileExists(body.path));
+
+  const listed = await app.request("/backups");
+  assertEquals(listed.status, 200);
+  const info = await listed.json();
+  assert(info.backups.length >= 1);
+
+  db.close();
+  await Deno.remove(dir, { recursive: true });
 });
 
 Deno.test("renderReceipt: embeds logo data URI + editable footer", () => {

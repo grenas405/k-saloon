@@ -28,6 +28,9 @@ export interface Sale {
   payment_type: PaymentType;
   cash_tendered_cents: number | null;
   change_cents: number | null;
+  status: "paid" | "void";
+  voided_at: string | null;
+  void_reason: string | null;
   lines?: SaleLine[];
 }
 
@@ -37,6 +40,8 @@ export interface DayReport {
   card_total_cents: number;
   total_cents: number;
   count: number;
+  void_count: number;
+  void_total_cents: number;
 }
 
 export interface Kpis {
@@ -68,4 +73,31 @@ export interface CartLine {
   name: string;
   unit_price_cents: number;
   qty: number;
+}
+
+export interface CloseoutReport {
+  date: string;
+  paid_count: number;
+  void_count: number;
+  item_count: number;
+  subtotal_cents: number;
+  tax_cents: number;
+  revenue_cents: number;
+  cash_cents: number;
+  card_cents: number;
+  void_total_cents: number;
+  avg_ticket_cents: number;
+  first_sale_at: string | null;
+  last_sale_at: string | null;
+  top_items: Array<{ name: string; qty: number; total_cents: number }>;
+}
+
+export interface BackupInfo {
+  directory: string | null;
+  backups: Array<{
+    name: string;
+    path: string;
+    size_bytes: number;
+    modified_at: string;
+  }>;
 }
