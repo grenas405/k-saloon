@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand gradient for K Saloon. Reused across the
+     header, CTAs, count-up totals, active pills, and the receipt total bar. */
+  --brand-from: #f59e0b;
+  --brand-via: #b45309;
+  --brand-to: #7f1d1d;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Large, touch-friendly tap targets for non-technical staff. */
+button {
+  touch-action: manipulation;
+}
+
+@layer components {
+  /* Brand gradient surface (badge, CTA). */
+  .bg-brand {
+    background-image: linear-gradient(
+      135deg,
+      var(--brand-from),
+      var(--brand-via),
+      var(--brand-to)
+    );
+  }
+  .text-brand {
+    background-image: linear-gradient(
+      135deg,
+      var(--brand-from),
+      var(--brand-to)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Vibrant catalog tile — gradient derived from the item color via CSS vars. */
+  .tile {
+    @apply relative flex h-28 flex-col justify-between overflow-hidden rounded-2xl p-3 text-left text-white shadow-md transition-transform;
+    background-image: linear-gradient(
+      150deg,
+      var(--tile-color, #475569),
+      color-mix(in srgb, var(--tile-color, #475569) 62%, black)
+    );
+  }
+  .tile:active {
+    @apply animate-pop;
+  }
+
+  /* Soft brand-tinted radial halo behind the empty-state hero logo. */
+  .hero-glow {
+    background: radial-gradient(
+      60% 50% at 50% 38%,
+      color-mix(in srgb, var(--brand-from) 14%, transparent),
+      transparent 70%
+    );
+  }
+
+  /* Primary call-to-action with an animated sheen. */
+  .cta {
+    @apply relative w-full overflow-hidden rounded-2xl py-4 text-lg font-black text-white shadow-lg transition;
+  }
+  .cta::after {
+    content: "";
+    @apply pointer-events-none absolute inset-y-0 left-0 w-1/3 skew-x-12 bg-white/25 blur-md;
+    animation: shimmer 2.4s ease-in-out infinite;
+  }
+}
+
+/* Respect users who prefer reduced motion: drop the heavy/looping animations. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .cta::after {
+    display: none;
+  }
+}

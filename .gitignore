@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+dist-renderer/
+release/
+
+# Local data / backups produced at runtime
+*.db
+*.db-wal
+*.db-shm
+backups/
+
+# Editor / OS
+.DS_Store
+*.log
