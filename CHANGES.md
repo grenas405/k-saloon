@@ -9,6 +9,7 @@ All notable changes to K Saloon POS are documented here.
 - Void sale workflow that keeps the original ticket for audit while excluding voided sales from revenue, dashboard, closeout, and payment mix totals.
 - End-of-day closeout summary with paid ticket count, cash/card totals, tax, void totals, top items, and printable/PDF report preview.
 - Manual backup controls in Settings with backup folder visibility, Backup Now, recent snapshot list, and desktop folder opening.
+- Beer-mug cursor treatment for a more bar-themed register experience.
 
 ### Changed
 - Dashboard and daily totals now count only paid sales while History still displays voided tickets.
